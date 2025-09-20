@@ -119,5 +119,3 @@ The Automated Resume Relevance Check System will:
 MIT License
 
 ---
-
-*Built with ❤️ by Innomatics Research Labs | KUSHAL MR & S MAYUR*
