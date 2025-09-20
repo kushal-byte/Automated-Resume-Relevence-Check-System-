@@ -1,6 +1,23 @@
-# AI-Powered Resume & Job Description Matcher
+# # Automated Resume Relevance Check System
 
-This project is an advanced AI-driven system for analyzing and matching resumes to job descriptions. It leverages modern NLP, semantic embeddings, fuzzy matching, and LLMs to provide comprehensive candidate-job fit analysis and actionable improvement suggestions.
+At Innomatics Research Labs, resume evaluation is currently manual, inconsistent, and time-consuming. Every week, the placement team across Hyderabad, Bangalore, Pune, and Delhi NCR receives 18–20 job requirements, with each posting attracting thousands of applications.  
+
+Currently, recruiters and mentors manually review resumes, matching them against job descriptions (JD). This leads to:  
+1. Delays in shortlisting candidates.  
+2. Inconsistent judgments, as evaluators may interpret role requirements differently.  
+3. High workload for placement staff, reducing their ability to focus on interview prep and student guidance.  
+
+With hiring companies expecting fast and high-quality shortlists, there is a pressing need for an automated system that can scale, be consistent, and provide actionable feedback to students.  
+
+## Objective
+
+The Automated Resume Relevance Check System will:  
+1. Automate resume evaluation against job requirements at scale.  
+2. Generate a Relevance Score (0–100) for each resume per job role.  
+3. Highlight gaps such as missing skills, certifications, or projects.  
+4. Provide a fit verdict (High / Medium / Low suitability) to recruiters.  
+5. Offer personalized improvement feedback to students.  
+6. Store evaluations in a web-based dashboard accessible to the placement team.  
 
 ## Features
 
