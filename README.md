@@ -114,8 +114,4 @@ The Automated Resume Relevance Check System will:
 - **Prompt Engineering:** Modify prompts in [`llm_analysis/prompt_templates.py`](llm_analysis/prompt_templates.py) for different LLM behaviors.
 - **Scoring Logic:** Adjust weights and formulas in [`matchers/final_scorer.py`](matchers/final_scorer.py).
 
-## License
-
-MIT License
-
 ---
