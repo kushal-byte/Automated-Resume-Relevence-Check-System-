@@ -1,2 +1,2 @@
-# Innomatics Research Labs KUSHAL MR  S MAYUR
+# Innomatics Research Labs KUSHAL MR | S MAYUR
 Generative AI (GenAI), Large Language Models (LLMs), LangChain, LangGraph and LangSmith
