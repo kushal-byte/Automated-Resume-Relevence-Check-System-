@@ -1,5 +1,6 @@
 # # Automated Resume Relevance Check System
 
+url for production ready website: https://huggingface.co/spaces/kushal2006/hackathongenai
 At Innomatics Research Labs, resume evaluation is currently manual, inconsistent, and time-consuming. Every week, the placement team across Hyderabad, Bangalore, Pune, and Delhi NCR receives 18–20 job requirements, with each posting attracting thousands of applications.  
 
 Currently, recruiters and mentors manually review resumes, matching them against job descriptions (JD). This leads to:  
