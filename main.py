@@ -1,7 +1,8 @@
-# main.py - ENHANCED WITH FULL TECH STACK
+# main.py - COMPLETE WITH LANGGRAPH + LANGSMITH
 import os
 from dotenv import load_dotenv
 
+import time
 # Load environment variables
 load_dotenv()
 
@@ -21,7 +22,7 @@ from parsers.skill_extractor import extract_skills
 from parsers.jd_parser import parse_jd
 from llm_analysis.llm_analyzer import LLMResumeAnalyzer, test_llm_connection
 
-# NEW ENHANCED COMPONENTS
+# ENHANCED COMPONENTS
 try:
     from matchers.final_scorer import EnhancedResumeScorer
     ENHANCED_SCORING = True
@@ -29,6 +30,16 @@ try:
 except ImportError:
     print("⚠️ Enhanced components not found, using basic scoring")
     ENHANCED_SCORING = False
+
+# LANGGRAPH & LANGSMITH COMPONENTS
+try:
+    from llm_analysis.langgraph_pipeline import ResumeAnalysisPipeline
+    from llm_analysis.langsmith_logger import logger, trace_llm_analysis
+    ADVANCED_PIPELINE = True
+    print("✅ LangGraph + LangSmith components loaded")
+except ImportError:
+    print("⚠️ LangGraph/LangSmith not found - install with: pip install langgraph langsmith")
+    ADVANCED_PIPELINE = False
 
 def load_file(file_path):
     """Load text from various file formats"""
@@ -60,11 +71,23 @@ def calculate_basic_scores(resume_skills, jd_skills):
         "total_jd_skills": len(jd_skills)
     }
 
+@trace_llm_analysis if ADVANCED_PIPELINE else lambda x: x  # LangSmith tracing decorator
 def complete_ai_analysis(resume_file, jd_file):
-    """Complete AI-powered resume analysis with enhanced tech stack"""
+    """Complete AI-powered resume analysis with LangGraph + LangSmith"""
     
     print("🚀 STARTING ENHANCED AI-POWERED RESUME ANALYSIS")
+    if ADVANCED_PIPELINE:
+        print("   🔗 LangGraph: Structured pipeline")
+        print("   🔍 LangSmith: Observability & logging")
     print("=" * 65)
+    
+    # Start LangSmith trace
+    trace_id = None
+    if ADVANCED_PIPELINE:
+        trace_id = logger.start_trace("complete_resume_analysis", {
+            "resume_file": resume_file,
+            "jd_file": jd_file
+        })
     
     # Test LLM connection first
     if not test_llm_connection():
@@ -72,8 +95,13 @@ def complete_ai_analysis(resume_file, jd_file):
     
     try:
         # Initialize components
-        print("\n🔧 INITIALIZING COMPONENTS...")
+        print("\n🔧 INITIALIZING ENHANCED COMPONENTS...")
         llm_analyzer = LLMResumeAnalyzer(model=LLM_MODEL)
+        
+        # LangGraph pipeline
+        if ADVANCED_PIPELINE:
+            pipeline = ResumeAnalysisPipeline(model=LLM_MODEL)
+            print("✅ LangGraph pipeline initialized")
         
         if ENHANCED_SCORING:
             enhanced_scorer = EnhancedResumeScorer()
@@ -117,8 +145,6 @@ def complete_ai_analysis(resume_file, jd_file):
                 {"raw_text": jd_raw, "skills": jd_skills}
             )
             
-            # Step 5: LLM Analysis (Enhanced)
-            print("\n🤖 ENHANCING WITH LLM INSIGHTS...")
             basic_scores = {
                 "score": comprehensive_result["breakdown"]["hard_match"]["score"],
                 "matched_skills": comprehensive_result["breakdown"]["hard_match"]["matched_skills"],
@@ -135,24 +161,60 @@ def complete_ai_analysis(resume_file, jd_file):
             print(f"✅ Keyword match: {basic_scores['score']:.1f}%")
             print(f"✅ Matched skills: {basic_scores['matched_count']}/{basic_scores['total_jd_skills']}")
         
-        # Step 6: LLM Analysis
-        print("\n🧠 RUNNING LLM ANALYSIS...")
-        llm_analysis = llm_analyzer.analyze_resume_vs_jd(
-            resume_clean, jd_raw, basic_scores
-        )
+        # Step 5: LangGraph Structured Pipeline (if available)
+        if ADVANCED_PIPELINE:
+            print("\n🔗 RUNNING LANGGRAPH STRUCTURED PIPELINE...")
+            pipeline_result = pipeline.run_structured_analysis(resume_clean, jd_raw, basic_scores)
+            
+            if pipeline_result.get("pipeline_status") == "completed":
+                llm_analysis = pipeline_result["llm_analysis"]
+                improvement_roadmap = pipeline_result["improvement_roadmap"]
+                print("✅ LangGraph pipeline completed successfully")
+            else:
+                print("⚠️ LangGraph pipeline failed, using fallback analysis")
+                llm_analysis = llm_analyzer.analyze_resume_vs_jd(resume_clean, jd_raw, basic_scores)
+                improvement_roadmap = llm_analyzer.generate_improvement_roadmap(llm_analysis)
+        else:
+            # Standard LLM Analysis
+            print("\n🧠 RUNNING LLM ANALYSIS...")
+            llm_analysis = llm_analyzer.analyze_resume_vs_jd(resume_clean, jd_raw, basic_scores)
+            
+            print("\n🗺️ GENERATING IMPROVEMENT ROADMAP...")
+            improvement_roadmap = llm_analyzer.generate_improvement_roadmap(llm_analysis)
         
-        # Step 7: Generate improvement roadmap
-        print("\n🗺️ GENERATING IMPROVEMENT ROADMAP...")
-        improvement_roadmap = llm_analyzer.generate_improvement_roadmap(llm_analysis)
-        
-        # Step 8: Display enhanced results
+        # Step 6: Display enhanced results
         if ENHANCED_SCORING:
             display_enhanced_results(comprehensive_result, llm_analysis, improvement_roadmap)
         else:
             display_structured_results(basic_scores, llm_analysis, improvement_roadmap, {})
         
+        # Log success metrics (LangSmith)
+        if ADVANCED_PIPELINE and trace_id:
+            logger.log_metrics({
+                "analysis_success": True,
+                "resume_length": len(resume_raw),
+                "jd_length": len(jd_raw),
+                "skills_found": len(resume_skills),
+                "pipeline_status": pipeline_result.get("pipeline_status", "fallback") if ADVANCED_PIPELINE else "standard",
+                "enhanced_scoring": ENHANCED_SCORING
+            })
+            
+            logger.end_trace(trace_id, {
+                "pipeline_status": pipeline_result.get("pipeline_status", "fallback") if ADVANCED_PIPELINE else "standard",
+                "final_score": llm_analysis.get("overall_fit_score", 0)
+            }, "success")
+        
     except Exception as e:
         print(f"❌ Analysis failed: {e}")
+        
+        # Log error (LangSmith)
+        if ADVANCED_PIPELINE and trace_id:
+            logger.end_trace(trace_id, {}, "error", str(e))
+            logger.log_metrics({
+                "analysis_success": False,
+                "error": str(e)
+            })
+        
         import traceback
         traceback.print_exc()
 
@@ -160,7 +222,9 @@ def display_enhanced_results(comprehensive_result, llm_analysis, roadmap):
     """Display enhanced results with full tech stack analysis"""
     
     print(f"\n{'='*75}")
-    print("🎯 ENHANCED RESUME RELEVANCE ANALYSIS REPORT")
+    print("🎯 Automated Resume Relevance Check Report (Enhanced)")
+    if ADVANCED_PIPELINE:
+        print("   🔗 Powered by LangGraph + LangSmith")
     print("=" * 75)
     
     # Get breakdown
@@ -269,13 +333,26 @@ def display_enhanced_results(comprehensive_result, llm_analysis, roadmap):
         final_verdict = final_verdict[:200] + "..."
     print(f"   {final_verdict}")
     
+    # LangSmith Session Summary (if available)
+    if ADVANCED_PIPELINE:
+        print(f"\n🔍 LANGSMITH OBSERVABILITY:")
+        try:
+            session_summary = logger.get_session_summary()
+            print(f"   📊 Total Traces: {session_summary.get('total_traces', 0)}")
+            print(f"   📈 Total Metrics: {session_summary.get('total_metrics', 0)}")
+            print(f"   📁 Session ID: {session_summary.get('session_id', 'N/A')[:8]}...")
+        except:
+            print(f"   📊 Session data available in logs/ directory")
+    
     print(f"\n{'='*75}")
 
 def display_structured_results(basic_scores, llm_analysis, roadmap, enhanced_skills):
     """Fallback display for basic scoring (original function)"""
     
     print(f"\n{'='*70}")
-    print("🎯 RESUME RELEVANCE ANALYSIS REPORT (Basic Mode)")
+    print("🎯 Automated Resume Relevance Check Report")
+    if ADVANCED_PIPELINE:
+        print("   🔗 LangGraph + LangSmith Integration Active")
     print("=" * 70)
     
     # RELEVANCE ANALYSIS - 3 Steps
@@ -368,11 +445,25 @@ def display_structured_results(basic_scores, llm_analysis, roadmap, enhanced_ski
     
     print(f"\n{'='*70}")
 
+@trace_llm_analysis if ADVANCED_PIPELINE else lambda x: x
 def complete_ai_analysis_api(resume_file, jd_file):
-    """API version with enhanced tech stack analysis"""
+    """API version with LangGraph + LangSmith integration"""
+    start_time = time.time()
+    
+    trace_id = None
+    if ADVANCED_PIPELINE:
+        trace_id = logger.start_trace("api_resume_analysis", {
+            "resume_file": resume_file,
+            "jd_file": jd_file,
+            "api_call": True
+        })
     
     try:
         llm_analyzer = LLMResumeAnalyzer(model=LLM_MODEL)
+        
+        # Initialize LangGraph pipeline if available
+        if ADVANCED_PIPELINE:
+            pipeline = ResumeAnalysisPipeline(model=LLM_MODEL)
         
         # Load and process files
         resume_raw = load_file(resume_file)
@@ -397,16 +488,32 @@ def complete_ai_analysis_api(resume_file, jd_file):
             basic_scores = {
                 "score": comprehensive_result["breakdown"]["hard_match"]["score"],
                 "matched_skills": comprehensive_result["breakdown"]["hard_match"]["matched_skills"],
-                "missing_skills": comprehensive_result["breakdown"]["hard_match"]["missing_skills"]
+                "missing_skills": comprehensive_result["breakdown"]["hard_match"]["missing_skills"],
+                "matched_count": comprehensive_result["breakdown"]["hard_match"]["matched_count"],
+                "total_jd_skills": comprehensive_result["breakdown"]["hard_match"]["total_jd_skills"]
             }
         else:
             basic_scores = calculate_basic_scores(resume_skills, jd_skills)
             hard_match_score = basic_scores['score']
-            semantic_score = 50  # Default semantic score
+            semantic_score = 50
             final_score = (hard_match_score * 0.4) + (semantic_score * 0.6)
         
-        llm_analysis = llm_analyzer.analyze_resume_vs_jd(resume_clean, jd_raw, basic_scores)
-        improvement_roadmap = llm_analyzer.generate_improvement_roadmap(llm_analysis)
+        # Run LangGraph pipeline if available
+        if ADVANCED_PIPELINE:
+            pipeline_result = pipeline.run_structured_analysis(resume_clean, jd_raw, basic_scores)
+            
+            if pipeline_result.get("pipeline_status") == "completed":
+                llm_analysis = pipeline_result["llm_analysis"]
+                improvement_roadmap = pipeline_result["improvement_roadmap"]
+                pipeline_used = True
+            else:
+                llm_analysis = llm_analyzer.analyze_resume_vs_jd(resume_clean, jd_raw, basic_scores)
+                improvement_roadmap = llm_analyzer.generate_improvement_roadmap(llm_analysis)
+                pipeline_used = False
+        else:
+            llm_analysis = llm_analyzer.analyze_resume_vs_jd(resume_clean, jd_raw, basic_scores)
+            improvement_roadmap = llm_analyzer.generate_improvement_roadmap(llm_analysis)
+            pipeline_used = False
         
         # Determine verdict
         if final_score >= 80:
@@ -419,9 +526,15 @@ def complete_ai_analysis_api(resume_file, jd_file):
             verdict = "Low Suitability" 
             verdict_description = "Significant gaps - Major upskilling needed"
         
-        return {
+        # Finalize processing time
+        end_time = time.time()
+        processing_time = round(end_time - start_time, 2)
+
+        result = {
             "success": True,
             "enhanced_analysis": ENHANCED_SCORING,
+            "langgraph_pipeline": pipeline_used,
+            "langsmith_logging": ADVANCED_PIPELINE,
             "relevance_analysis": {
                 "step_1_hard_match": {
                     "exact_matches": f"{basic_scores.get('matched_count', 0)}/{basic_scores.get('total_jd_skills', 0)}",
@@ -457,12 +570,34 @@ def complete_ai_analysis_api(resume_file, jd_file):
                     "fuzzy_matching": ENHANCED_SCORING, 
                     "spacy_nlp": ENHANCED_SCORING,
                     "tfidf_scoring": ENHANCED_SCORING,
-                    "faiss_vector_store": ENHANCED_SCORING
+                    "faiss_vector_store": ENHANCED_SCORING,
+                    "langgraph_pipeline": pipeline_used,
+                    "langsmith_logging": ADVANCED_PIPELINE
                 }
+            },
+            "processing_info": {
+                "processing_time": processing_time
             }
         }
         
+        # Log success
+        if ADVANCED_PIPELINE and trace_id:
+            logger.end_trace(trace_id, {
+                "final_score": final_score,
+                "pipeline_used": pipeline_used
+            }, "success")
+            
+            logger.log_metrics({
+                "api_success": True,
+                "final_score": final_score,
+                "pipeline_used": pipeline_used
+            })
+        
+        return result
+        
     except Exception as e:
+        if ADVANCED_PIPELINE and trace_id:
+            logger.end_trace(trace_id, {}, "error", str(e))
         return {"success": False, "error": str(e)}
 
 if __name__ == "__main__":
@@ -493,6 +628,12 @@ if __name__ == "__main__":
         exit(1)
     
     print("✅ All prerequisites checked!")
+    
+    # Show final tech stack status
+    print(f"\n🔧 TECH STACK STATUS:")
+    print(f"   • Enhanced Scoring: {'✅ Active' if ENHANCED_SCORING else '⚠️ Basic'}")
+    print(f"   • LangGraph Pipeline: {'✅ Active' if ADVANCED_PIPELINE else '⚠️ Not installed'}")
+    print(f"   • LangSmith Logging: {'✅ Active' if ADVANCED_PIPELINE else '⚠️ Not installed'}")
     
     # Run the complete enhanced analysis
     complete_ai_analysis(resume_file, jd_file)

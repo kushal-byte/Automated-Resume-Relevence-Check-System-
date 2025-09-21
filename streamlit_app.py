@@ -1,0 +1,915 @@
+# streamlit_app.py - COMPLETE STREAMLIT APP WITH INTERACTIVE HISTORY MANAGEMENT
+import streamlit as st
+import requests
+import json
+import time
+from datetime import datetime
+import pandas as pd
+import io
+
+# Optional visualization imports
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+
+# Helper functions (defined at the top)
+def create_csv_export(export_data):
+    """Create CSV export"""
+    analysis = export_data["analysis"]
+    
+    csv_lines = [
+        "Resume Analysis Results",
+        "",
+        f"Resume,{export_data['files']['resume']}",
+        f"Job Description,{export_data['files']['jd']}",
+        f"Date,{export_data['timestamp']}",
+        "",
+        "SCORES"
+    ]
+    
+    if "enhanced_analysis" in analysis:
+        scoring = analysis["enhanced_analysis"]["relevance_scoring"]
+        csv_lines.extend([
+            f"Overall Score,{scoring['overall_score']}/100",
+            f"Skill Match,{scoring['skill_match_score']:.1f}%",
+            f"Experience Match,{scoring['experience_match_score']:.1f}%",
+            f"Verdict,{scoring['fit_verdict']}",
+            f"Confidence,{scoring['confidence']:.1f}%"
+        ])
+        
+        # Add matched skills
+        csv_lines.extend(["", "MATCHED SKILLS"])
+        for skill in scoring.get('matched_must_have', []):
+            csv_lines.append(f"✓,{skill}")
+        
+        # Add missing skills
+        csv_lines.extend(["", "MISSING SKILLS"])
+        for skill in scoring.get('missing_must_have', []):
+            csv_lines.append(f"✗,{skill}")
+            
+    elif "relevance_analysis" in analysis:
+        relevance = analysis["relevance_analysis"]
+        csv_lines.extend([
+            f"Final Score,{relevance['step_3_scoring_verdict']['final_score']}/100",
+            f"Hard Match,{relevance['step_1_hard_match']['coverage_score']:.1f}%",
+            f"Semantic Score,{relevance['step_2_semantic_match']['experience_alignment_score']}/10",
+            f"Verdict,{analysis['output_generation']['verdict']}"
+        ])
+        
+        # Add matched skills
+        csv_lines.extend(["", "MATCHED SKILLS"])
+        for skill in relevance['step_1_hard_match'].get('matched_skills', []):
+            csv_lines.append(f"✓,{skill}")
+    
+    return "\n".join(csv_lines)
+
+def create_text_report(export_data):
+    """Create text report"""
+    analysis = export_data["analysis"]
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    report = f"""
+RESUME ANALYSIS REPORT
+=====================
+
+Generated: {timestamp}
+Resume: {export_data['files']['resume']}
+Job Description: {export_data['files']['jd']}
+
+ANALYSIS RESULTS
+===============
+
+"""
+    
+    if "enhanced_analysis" in analysis:
+        scoring = analysis["enhanced_analysis"]["relevance_scoring"]
+        job_parsing = analysis["enhanced_analysis"]["job_parsing"]
+        
+        report += f"""JOB DETAILS:
+Role: {job_parsing.get('role_title', 'Not specified')}
+Experience Required: {job_parsing.get('experience_required', 'Not specified')}
+
+SCORES:
+Overall Score: {scoring['overall_score']}/100
+Skill Match: {scoring['skill_match_score']:.1f}%
+Experience Match: {scoring['experience_match_score']:.1f}%
+Verdict: {scoring['fit_verdict']}
+Confidence: {scoring['confidence']:.1f}%
+
+MATCHED SKILLS:
+"""
+        for skill in scoring.get('matched_must_have', []):
+            report += f"✓ {skill}\n"
+        
+        report += "\nMISSING SKILLS:\n"
+        for skill in scoring.get('missing_must_have', []):
+            report += f"✗ {skill}\n"
+        
+        if scoring.get('improvement_suggestions'):
+            report += "\nRECOMMENDATIONS:\n"
+            for i, suggestion in enumerate(scoring['improvement_suggestions'], 1):
+                report += f"{i}. {suggestion}\n"
+        
+        if scoring.get('quick_wins'):
+            report += "\nQUICK WINS:\n"
+            for i, win in enumerate(scoring['quick_wins'], 1):
+                report += f"{i}. {win}\n"
+    
+    elif "relevance_analysis" in analysis:
+        relevance = analysis["relevance_analysis"]
+        output = analysis["output_generation"]
+        
+        report += f"""SCORES:
+Final Score: {relevance['step_3_scoring_verdict']['final_score']}/100
+Hard Match: {relevance['step_1_hard_match']['coverage_score']:.1f}%
+Semantic Score: {relevance['step_2_semantic_match']['experience_alignment_score']}/10
+Exact Matches: {relevance['step_1_hard_match']['exact_matches']}
+Verdict: {output['verdict']}
+
+MATCHED SKILLS:
+"""
+        for skill in relevance['step_1_hard_match'].get('matched_skills', []):
+            report += f"✓ {skill}\n"
+        
+        missing_skills = output.get('missing_skills', [])
+        if missing_skills:
+            report += "\nMISSING SKILLS:\n"
+            for skill in missing_skills[:10]:
+                report += f"✗ {skill}\n"
+    
+    report += f"\n---\nGenerated by AI Resume Analyzer\n{timestamp}"
+    return report
+
+def check_backend_status():
+    """Check if backend is available and get system info"""
+    try:
+        response = requests.get("http://localhost:8000/health", timeout=3)
+        if response.status_code == 200:
+            health_data = response.json()
+            return {
+                "available": True,
+                "components": health_data.get("components", {}),
+                "version": health_data.get("version", "Unknown")
+            }
+        else:
+            return {"available": False, "error": f"HTTP {response.status_code}"}
+    except requests.exceptions.ConnectionError:
+        return {"available": False, "error": "Connection refused - Backend not running"}
+    except requests.exceptions.Timeout:
+        return {"available": False, "error": "Request timeout"}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+def safe_api_call(url, method="GET", **kwargs):
+    """Make a safe API call with error handling"""
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            if method.upper() == "GET":
+                response = requests.get(url, timeout=10, **kwargs)
+            elif method.upper() == "POST":
+                response = requests.post(url, timeout=120, **kwargs)
+            elif method.upper() == "DELETE":
+                response = requests.delete(url, timeout=30, **kwargs)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
+            
+            response.raise_for_status()
+            
+            # Handle empty responses for DELETE requests
+            if method.upper() == "DELETE" and not response.content:
+                return {"success": True, "data": {"message": "Deleted successfully"}}
+            
+            return {"success": True, "data": response.json(), "status_code": response.status_code}
+        
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return {"success": False, "error": "Cannot connect to backend", "error_type": "connection"}
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return {"success": False, "error": "Request timed out", "error_type": "timeout"}
+        except requests.exceptions.HTTPError as e:
+            return {"success": False, "error": f"HTTP {e.response.status_code}", "error_type": "http"}
+        except json.JSONDecodeError:
+            return {"success": False, "error": "Invalid response format", "error_type": "json"}
+        except Exception as e:
+            return {"success": False, "error": str(e), "error_type": "unknown"}
+
+# Page config
+st.set_page_config(
+    page_title="AI Resume Analyzer",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Enhanced CSS styling (keeping your original theme)
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    
+    :root {
+        --font-family: 'Inter', sans-serif;
+        --primary-color: #3B82F6;
+        --accent-color: #60A5FA;
+        --success-color: #10B981;
+        --warning-color: #F59E0B;
+        --error-color: #EF4444;
+        --background-color: #F9FAFB;
+        --card-bg-color: #FFFFFF;
+        --text-color: #1F2937;
+        --subtle-text-color: #6B7280;
+        --border-color: #E5E7EB;
+    }
+
+    /* General Styles */
+    body, .stApp { 
+        font-family: var(--font-family); 
+        background-color: var(--background-color); 
+        color: var(--text-color); 
+    }
+    #MainMenu, footer, header { visibility: hidden; }
+
+    /* Main Header */
+    .main-header {
+        background-color: var(--card-bg-color);
+        padding: 2rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        text-align: center;
+        border: 1px solid var(--border-color);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    .main-header h1 {
+        color: var(--primary-color);
+        font-weight: 700;
+        letter-spacing: -1px;
+        margin-bottom: 0.5rem;
+    }
+    .main-header p {
+        color: var(--subtle-text-color);
+        font-size: 1.1rem;
+        margin: 0;
+    }
+
+    /* Status indicators */
+    .status-indicator {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin: 0.25rem;
+    }
+    .status-online {
+        background-color: #D1FAE5;
+        color: #065F46;
+        border: 1px solid #A7F3D0;
+    }
+    .status-offline {
+        background-color: #FEE2E2;
+        color: #991B1B;
+        border: 1px solid #FECACA;
+    }
+    .status-warning {
+        background-color: #FEF3C7;
+        color: #92400E;
+        border: 1px solid #FCD34D;
+    }
+
+    /* File Uploader Customization */
+    [data-testid="stFileUploader"] > div {
+        background-color: var(--card-bg-color);
+        padding: 2rem;
+        border-radius: 12px;
+        border: 2px dashed var(--border-color);
+        transition: all 0.3s ease;
+    }
+    [data-testid="stFileUploader"] > div:hover {
+        border-color: var(--primary-color);
+        background-color: #F9FAFB;
+    }
+    [data-testid="stFileUploader"] label {
+        font-weight: 600;
+        color: var(--primary-color);
+    }
+
+    /* Results & Cards */
+    .results-container, .feature-card, .download-section {
+        background-color: var(--card-bg-color);
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        margin: 1rem 0;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    [data-testid="metric-container"] {
+        background-color: var(--card-bg-color);
+        border: 1px solid var(--border-color);
+        padding: 1rem;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        transition: transform 0.2s ease;
+    }
+    [data-testid="metric-container"]:hover {
+        transform: translateY(-2px);
+    }
+
+    /* Score Cards */
+    .score-card {
+        background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+        color: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        text-align: center;
+        margin: 0.5rem 0;
+    }
+    .score-number { font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .score-label { font-size: 0.9rem; opacity: 0.9; }
+
+    /* Skill Tags */
+    .skill-tag {
+        display: inline-block;
+        padding: 0.3rem 0.8rem;
+        border-radius: 16px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        margin: 0.25rem;
+        border: 1px solid transparent;
+        transition: transform 0.2s ease;
+    }
+    .skill-tag:hover {
+        transform: scale(1.05);
+    }
+    .skill-tag.matched {
+        background-color: #D1FAE5;
+        color: #065F46;
+        border-color: #A7F3D0;
+    }
+    .skill-tag.missing {
+        background-color: #FEE2E2;
+        color: #991B1B;
+        border-color: #FECACA;
+    }
+    .skill-tag.bonus {
+        background-color: #DBEAFE;
+        color: #1E40AF;
+        border-color: #BFDBFE;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        background-color: var(--accent-color);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+    }
+    .stDownloadButton > button {
+        background-color: var(--success-color);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .stDownloadButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+    }
+
+    /* Progress bar */
+    .stProgress > div > div > div > div {
+        background-image: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+    }
+
+    /* Error/Warning styling */
+    .stError {
+        background-color: #FEE2E2;
+        color: #991B1B;
+        border-left: 4px solid var(--error-color);
+        border-radius: 8px;
+    }
+    .stWarning {
+        background-color: #FEF3C7;
+        color: #92400E;
+        border-left: 4px solid var(--warning-color);
+        border-radius: 8px;
+    }
+    .stSuccess {
+        background-color: #D1FAE5;
+        color: #065F46;
+        border-left: 4px solid var(--success-color);
+        border-radius: 8px;
+    }
+    .stInfo {
+        background-color: #DBEAFE;
+        color: #1E40AF;
+        border-left: 4px solid var(--primary-color);
+        border-radius: 8px;
+    }
+
+    /* History items */
+    .history-item {
+        background-color: var(--card-bg-color);
+        border-left: 3px solid var(--primary-color);
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+        border-radius: 0 8px 8px 0;
+        transition: transform 0.2s ease;
+    }
+    .history-item:hover {
+        transform: translateX(2px);
+    }
+    .history-item.high-score {
+        border-left-color: var(--success-color);
+    }
+    .history-item.medium-score {
+        border-left-color: var(--warning-color);
+    }
+    .history-item.low-score {
+        border-left-color: var(--error-color);
+    }
+
+    /* MINIMAL dashboard header addition - keeping your theme */
+    .quick-nav {
+        background-color: var(--card-bg-color);
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        border: 1px solid var(--border-color);
+        text-align: center;
+    }
+    .quick-nav a {
+        color: var(--primary-color);
+        text-decoration: none;
+        margin: 0 1rem;
+        font-weight: 500;
+    }
+    .quick-nav a:hover {
+        color: var(--accent-color);
+        text-decoration: underline;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --background-color: #111827;
+            --card-bg-color: #1F2937;
+            --text-color: #F3F4F6;
+            --subtle-text-color: #9CA3AF;
+            --border-color: #374151;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# MINIMAL Dashboard Header (using your existing theme colors)
+st.markdown("""
+<div class="quick-nav">
+    <strong>🎯 AUTOMATED RESUME RELEVANCE CHECK SYSTEM DASHBOARD</strong> | 
+    <a href="http://localhost:8000/dashboard" target="_blank">📊 Backend</a> |
+    <a href="http://localhost:8000/health" target="_blank">🔍 Health</a> |
+    <a href="http://localhost:8000/docs" target="_blank">📋 API Docs</a>
+</div>
+""", unsafe_allow_html=True)
+
+# Header (your existing design)
+st.markdown("""
+<div class="main-header">
+    <h1>🎯 AUTOMATED RESUME RELEVANCE CHECK SYSTEM</h1>
+    <p>Upload resumes and job descriptions for intelligent AI-powered candidate analysis</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+if 'results' not in st.session_state:
+    st.session_state.results = []
+
+# Sidebar with improved status checking (your existing design)
+with st.sidebar:
+    st.markdown("### 🚀 System Features")
+    features = [
+        ("🎯", "Semantic Matching", "AI-powered similarity analysis"),
+        ("🔄", "Fuzzy Matching", "Intelligent skill detection"),
+        ("📊", "TF-IDF Scoring", "Statistical analysis"),
+        ("🤖", "LLM Analysis", "GPT insights"),
+        ("📝", "NLP Processing", "Entity extraction"),
+        ("⚡", "Real-time", "Instant results")
+    ]
+    
+    for icon, title, desc in features:
+        st.markdown(f"""
+        <div class="feature-card" style="margin-bottom: 0.5rem;">
+            <div style="font-size: 1.5rem; float: left; margin-right: 1rem;">{icon}</div>
+            <div style="font-weight: 600; color: var(--primary-color);">{title}</div>
+            <div style="font-size: 0.85rem; color: var(--subtle-text-color);">{desc}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("### 🔧 System Status")
+    
+    # Check backend status
+    backend_status = check_backend_status()
+    
+    if backend_status["available"]:
+        st.markdown('<span class="status-indicator status-online">✅ Backend Connected</span>', unsafe_allow_html=True)
+        
+        components = backend_status.get("components", {})
+        
+        # Database status
+        db_status = components.get("database", "unavailable")
+        if db_status == "active":
+            st.markdown('<span class="status-indicator status-online">💾 Database Active</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="status-indicator status-warning">💾 Database Limited</span>', unsafe_allow_html=True)
+        
+        # Enhanced features
+        if components.get("enhanced_features") == "active":
+            st.markdown('<span class="status-indicator status-online">🧠 Enhanced AI</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="status-indicator status-warning">🧠 Basic Mode</span>', unsafe_allow_html=True)
+        
+        # Downloads
+        if components.get("download_features") == "active":
+            st.markdown('<span class="status-indicator status-online">📥 Downloads Ready</span>', unsafe_allow_html=True)
+        
+        # Version info
+        version = backend_status.get("version", "Unknown")
+        st.markdown(f"<small>Version: {version}</small>", unsafe_allow_html=True)
+        
+    else:
+        st.markdown('<span class="status-indicator status-offline">❌ Backend Offline</span>', unsafe_allow_html=True)
+        st.error(f"Error: {backend_status.get('error', 'Unknown error')}")
+        st.info("💡 Start backend: `python app.py`")
+    
+    st.markdown("---")
+    st.markdown("### 🔗 Quick Links")
+    
+    if backend_status["available"]:
+        if st.button("🎯 Dashboard", use_container_width=True):
+            st.markdown('[🎯 Open Dashboard](http://localhost:8000/dashboard)', unsafe_allow_html=True)
+            st.success("Dashboard link above ↑")
+        
+        if st.button("📋 API Docs", use_container_width=True):
+            st.markdown('[📋 Open API Documentation](http://localhost:8000/docs)', unsafe_allow_html=True)
+            st.success("API docs link above ↑")
+    else:
+        st.info("Links available when backend is running")
+
+# Main content (your existing design)
+st.markdown("### 📤 Upload Documents")
+upload_col1, upload_col2 = st.columns(2)
+
+with upload_col1:
+    resume_files = st.file_uploader(
+        "📄 **Upload Resumes**",
+        help="Upload one or more resumes (PDF, DOCX, TXT)",
+        type=['pdf', 'docx', 'txt'],
+        key="resume_uploader",
+        accept_multiple_files=True
+    )
+    if resume_files:
+        for f in resume_files:
+            st.success(f"📄 {f.name} ({len(f.getvalue())} bytes)")
+
+with upload_col2:
+    jd_files = st.file_uploader(
+        "📋 **Upload Job Descriptions**",
+        help="Upload one or more job descriptions (PDF, DOCX, TXT)",
+        type=['pdf', 'docx', 'txt'],
+        key="jd_uploader",
+        accept_multiple_files=True
+    )
+    if jd_files:
+        for f in jd_files:
+            st.success(f"📋 {f.name} ({len(f.getvalue())} bytes)")
+
+# Analysis button
+if st.button("🚀 Analyze Candidate Fit", type="primary", use_container_width=True):
+    if not backend_status["available"]:
+        st.error("❌ Backend is not available. Please start the backend first.")
+    elif not resume_files or not jd_files:
+        st.warning("⚠️ Please upload at least one resume and one job description.")
+    else:
+        st.session_state.results = []
+        total_analyses = len(resume_files) * len(jd_files)
+        
+        with st.container():
+            st.markdown("### 🤖 Processing Analysis")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            count = 0
+            errors = []
+            
+            for resume_file in resume_files:
+                for jd_file in jd_files:
+                    count += 1
+                    status_text.info(f"🧠 Analyzing {resume_file.name} vs {jd_file.name} ({count}/{total_analyses})...")
+                    
+                    # Make API call
+                    files = {'resume': resume_file, 'jd': jd_file}
+                    api_result = safe_api_call("http://localhost:8000/analyze", method="POST", files=files)
+                    
+                    if api_result["success"]:
+                        result = api_result["data"]
+                        result['ui_info'] = {
+                            'resume_filename': resume_file.name, 
+                            'jd_filename': jd_file.name
+                        }
+                        st.session_state.results.append(result)
+                    else:
+                        error_msg = f"Error analyzing {resume_file.name}: {api_result['error']}"
+                        errors.append(error_msg)
+                        st.error(error_msg)
+                    
+                    progress_bar.progress(count / total_analyses)
+            
+            # Clear progress indicators
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Show summary
+            if st.session_state.results:
+                st.success(f"✅ Completed {len(st.session_state.results)} successful analyses!")
+            
+            if errors:
+                st.error(f"❌ {len(errors)} analyses failed. Check backend logs for details.")
+
+# Display results (your existing design continues here)
+if st.session_state.results:
+    st.markdown("---")
+    st.markdown("### 📊 Batch Analysis Results")
+
+    for i, result in enumerate(st.session_state.results):
+        ui_info = result.get('ui_info', {})
+        resume_name = ui_info.get('resume_filename', f'Resume {i+1}')
+        jd_name = ui_info.get('jd_filename', f'Job {i+1}')
+        
+        # Determine overall score for color coding
+        overall_score = 0
+        if result.get("success"):
+            if 'enhanced_analysis' in result:
+                overall_score = result['enhanced_analysis']['relevance_scoring']['overall_score']
+            elif 'relevance_analysis' in result:
+                overall_score = result['relevance_analysis']['step_3_scoring_verdict']['final_score']
+        
+        # Color coding for expander
+        score_emoji = "🟢" if overall_score >= 80 else "🟡" if overall_score >= 60 else "🔴"
+        expander_title = f"{score_emoji} **{resume_name}** vs **{jd_name}** - Score: {overall_score}/100"
+        
+        with st.expander(expander_title, expanded=(i == 0)):  # First result expanded by default
+            if result.get("success"):
+                # Processing info
+                processing_info = result.get('processing_info', {})
+                processing_time = processing_info.get('processing_time', 0)
+                enhanced_mode = processing_info.get('enhanced_features', False)
+                database_saved = processing_info.get('database_saved', False)
+                
+                # Show mode and status
+                col_info1, col_info2, col_info3 = st.columns(3)
+                with col_info1:
+                    mode_color = "🚀" if enhanced_mode else "⚠️"
+                    st.info(f"{mode_color} Mode: {'Enhanced' if enhanced_mode else 'Standard'}")
+                with col_info2:
+                    st.info(f"⏱️ Time: {processing_time:.1f}s")
+                with col_info3:
+                    db_status = "💾 Saved" if database_saved else "⚠️ Not Saved"
+                    st.info(db_status)
+                
+                if 'enhanced_analysis' in result:
+                    # Enhanced analysis results
+                    relevance = result['enhanced_analysis']['relevance_scoring']
+                    job_parsing = result['enhanced_analysis']['job_parsing']
+                    
+                    # Job info
+                    st.markdown("#### 💼 Job Analysis")
+                    job_col1, job_col2 = st.columns(2)
+                    with job_col1:
+                        st.markdown(f"**Role:** {job_parsing.get('role_title', 'Not specified')}")
+                        st.markdown(f"**Experience:** {job_parsing.get('experience_required', 'Not specified')}")
+                    with job_col2:
+                        st.markdown(f"**Must-have Skills:** {len(job_parsing.get('must_have_skills', []))}")
+                        st.markdown(f"**Good-to-have Skills:** {len(job_parsing.get('good_to_have_skills', []))}")
+                    
+                    # Score metrics
+                    score_cols = st.columns(4)
+                    score_cols[0].metric("🏆 Overall Score", f"{relevance['overall_score']}/100")
+                    score_cols[1].metric("🎯 Skill Match", f"{relevance['skill_match_score']:.1f}%")
+                    score_cols[2].metric("💼 Experience Match", f"{relevance['experience_match_score']:.1f}%")
+                    score_cols[3].metric("🧠 Confidence", f"{relevance['confidence']:.1f}%")
+
+                    # Verdict
+                    verdict = relevance['fit_verdict']
+                    verdict_color = "#10B981" if "High" in verdict else "#F59E0B" if "Medium" in verdict else "#EF4444"
+                    st.markdown(f"""
+                    <div style="background: white; padding: 1rem; border-radius: 8px; border-left: 4px solid {verdict_color}; margin: 1rem 0;">
+                        <h4 style="color: {verdict_color}; margin: 0;">{verdict}</h4>
+                        <p style="color: #6B7280; margin: 0.5rem 0 0 0;">Confidence: {relevance['confidence']:.1f}%</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # Tabs for detailed analysis
+                    tab1, tab2, tab3 = st.tabs(["🎯 Skills Analysis", "💡 AI Recommendations", "📥 Download Report"])
+
+                    with tab1:
+                        skill_col1, skill_col2 = st.columns(2)
+                        
+                        with skill_col1:
+                            st.markdown("##### ✅ Matched Must-Have Skills")
+                            matched_skills = relevance.get('matched_must_have', [])
+                            if matched_skills:
+                                skills_html = ''.join(f'<span class="skill-tag matched">{s}</span>' for s in matched_skills)
+                                st.markdown(skills_html, unsafe_allow_html=True)
+                            else:
+                                st.info("No must-have skills matched")
+                        
+                        with skill_col2:
+                            st.markdown("##### ❌ Missing Must-Have Skills")
+                            missing_skills = relevance.get('missing_must_have', [])
+                            if missing_skills:
+                                skills_html = ''.join(f'<span class="skill-tag missing">{s}</span>' for s in missing_skills)
+                                st.markdown(skills_html, unsafe_allow_html=True)
+                            else:
+                                st.success("All required skills present!")
+
+                        # Bonus skills
+                        bonus_skills = relevance.get('matched_good_to_have', [])
+                        if bonus_skills:
+                            st.markdown("##### ⭐ Bonus Skills (Good to Have)")
+                            bonus_html = ''.join(f'<span class="skill-tag bonus">{s}</span>' for s in bonus_skills)
+                            st.markdown(bonus_html, unsafe_allow_html=True)
+
+                    with tab2:
+                        rec_col1, rec_col2 = st.columns(2)
+                        
+                        with rec_col1:
+                            st.markdown("##### 📈 Improvement Suggestions")
+                            suggestions = relevance.get('improvement_suggestions', [])
+                            if suggestions:
+                                for i, suggestion in enumerate(suggestions, 1):
+                                    st.markdown(f"**{i}.** {suggestion}")
+                            else:
+                                st.info("No specific improvements suggested")
+                        
+                        with rec_col2:
+                            st.markdown("##### ⚡ Quick Wins")
+                            quick_wins = relevance.get('quick_wins', [])
+                            if quick_wins:
+                                for i, win in enumerate(quick_wins, 1):
+                                    st.markdown(f"**{i}.** {win}")
+                            else:
+                                st.info("No quick wins identified")
+
+                    with tab3:
+                        export_data = {
+                            "timestamp": datetime.now().isoformat(),
+                            "files": {"resume": resume_name, "jd": jd_name},
+                            "analysis": result
+                        }
+                        
+                        d_col1, d_col2, d_col3 = st.columns(3)
+                        key_base = f"{resume_name}_{jd_name}_{i}".replace(" ", "_").replace(".", "_")
+                        
+                        with d_col1:
+                            st.download_button(
+                                "📄 JSON Report",
+                                json.dumps(export_data, indent=2),
+                                f"analysis_{key_base}.json",
+                                "application/json",
+                                use_container_width=True,
+                                key=f"json_{key_base}"
+                            )
+                        
+                        with d_col2:
+                            st.download_button(
+                                "📊 CSV Summary",
+                                create_csv_export(export_data),
+                                f"analysis_{key_base}.csv",
+                                "text/csv",
+                                use_container_width=True,
+                                key=f"csv_{key_base}"
+                            )
+                        
+                        with d_col3:
+                            st.download_button(
+                                "📝 Text Report",
+                                create_text_report(export_data),
+                                f"report_{key_base}.txt",
+                                "text/plain",
+                                use_container_width=True,
+                                key=f"txt_{key_base}"
+                            )
+
+                else:
+                    # Standard analysis results
+                    st.warning("⚠️ Running in Standard Mode - Enhanced features disabled")
+                    
+                    if 'relevance_analysis' in result:
+                        relevance = result['relevance_analysis']
+                        output = result['output_generation']
+                        
+                        # Score metrics
+                        score_cols = st.columns(4)
+                        score_cols[0].metric("🏆 Final Score", f"{relevance['step_3_scoring_verdict']['final_score']}/100")
+                        score_cols[1].metric("🎯 Hard Match", f"{relevance['step_1_hard_match']['coverage_score']:.1f}%")
+                        score_cols[2].metric("🧠 Semantic Score", f"{relevance['step_2_semantic_match']['experience_alignment_score']}/10")
+                        score_cols[3].metric("✅ Matches", f"{relevance['step_1_hard_match']['exact_matches']}")
+                        
+                        # Verdict
+                        verdict = output['verdict']
+                        st.success(f"**Verdict:** {verdict}")
+                        
+                        # Skills
+                        skill_col1, skill_col2 = st.columns(2)
+                        
+                        with skill_col1:
+                            st.markdown("##### ✅ Matched Skills")
+                            matched_skills = relevance['step_1_hard_match'].get('matched_skills', [])
+                            if matched_skills:
+                                skills_html = ''.join(f'<span class="skill-tag matched">{s}</span>' for s in matched_skills)
+                                st.markdown(skills_html, unsafe_allow_html=True)
+                            else:
+                                st.info("No skills matched")
+                        
+                        with skill_col2:
+                            st.markdown("##### ❌ Missing Skills")
+                            missing_skills = output.get('missing_skills', [])
+                            if missing_skills:
+                                skills_html = ''.join(f'<span class="skill-tag missing">{s}</span>' for s in missing_skills[:10])
+                                st.markdown(skills_html, unsafe_allow_html=True)
+                            else:
+                                st.success("No missing skills identified")
+
+            else:
+                st.error(f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
+
+# Analytics and History section (your existing design)
+st.markdown("---")
+st.markdown("### 📈 Analytics Overview")
+
+if backend_status["available"]:
+    analytics_result = safe_api_call("http://localhost:8000/analytics")
+    
+    if analytics_result["success"]:
+        analytics = analytics_result["data"]
+        
+        # Metrics
+        anal_col1, anal_col2 = st.columns(2)
+        with anal_col1:
+            st.metric("Total Analyses", analytics.get('total_analyses', 0))
+            st.metric("Average Score", f"{analytics.get('avg_score', 0):.1f}/100")
+        with anal_col2:
+            st.metric("High-Fit Rate", f"{analytics.get('success_rate', 0):.1f}%")
+            st.metric("High Matches", analytics.get('high_matches', 0))
+        
+        # Simple chart if there's data and plotly is available
+        if PLOTLY_AVAILABLE and analytics.get('total_analyses', 0) > 0:
+            chart_data = pd.DataFrame({
+                'Category': ['High Match', 'Medium Match', 'Low Match'],
+                'Count': [
+                    analytics.get('high_matches', 0),
+                    analytics.get('medium_matches', 0),
+                    analytics.get('low_matches', 0)
+                ]
+            })
+            
+            if chart_data['Count'].sum() > 0:
+                fig = px.pie(
+                    chart_data,
+                    values='Count',
+                    names='Category',
+                    color_discrete_sequence=['#10B981', '#F59E0B', '#EF4444']
+                )
+                fig.update_layout(height=250, margin=dict(t=20, b=0, l=0, r=0))
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning(f"Analytics unavailable: {analytics_result['error']}")
+else:
+    st.info("Backend required for analytics")
+
+# Footer (your existing design)
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; padding: 1rem; color: var(--subtle-text-color);">
+    <strong>🏆 AI Resume Analyzer</strong> | 
+    Built with Python, FastAPI & Streamlit | 
+    Enhanced with Interactive History Management
+</div>
+""", unsafe_allow_html=True)
